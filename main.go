@@ -56,6 +56,7 @@ func connectDB() (db *gorm.DB, err error) {
 		Addr:                 os.Getenv("MYSQL_ADDR"),
 		DBName:               os.Getenv("MYSQL_DBNAME"),
 		AllowNativePasswords: true,
+		ParseTime:            true,
 	}
 	db, err = gorm.Open(mysql.Open(cfg.FormatDSN()), &gorm.Config{})
 	if err != nil {
