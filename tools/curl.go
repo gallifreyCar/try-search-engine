@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	success int = iota
-	networkError
-	htmlError
+	Success int = iota
+	NetworkError
+	HtmlError
+	OthersError
 )
 
 // 重用client，4秒超时，不跟随重定向
@@ -24,15 +25,15 @@ func Curl(status model.Status) (doc *goquery.Document, res int) {
 	if err != nil {
 		fmt.Println("访问失败", status.Url, err)
 		document, _ := goquery.NewDocumentFromReader(strings.NewReader(""))
-		return document, networkError
+		return document, NetworkError
 	}
 	html := resp.String()
 	doc, err = goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		fmt.Println("HTML解析失败", status.Url, err)
 		document, _ := goquery.NewDocumentFromReader(strings.NewReader(""))
-		return document, htmlError
+		return document, HtmlError
 	}
-	return doc, success
+	return doc, Success
 
 }

@@ -1,7 +1,6 @@
 package database
 
 import (
-	"fmt"
 	mysqlCfg "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -24,6 +23,7 @@ func ConnectDB() (db *gorm.DB, err error) {
 		DBName:               os.Getenv("MYSQL_DBNAME"),
 		AllowNativePasswords: true,
 		ParseTime:            true,
+		Loc:                  time.Local,
 	}
 
 	// 设置日志
@@ -47,10 +47,11 @@ func ConnectDB() (db *gorm.DB, err error) {
 	return db, nil
 }
 
-func InitDB() {
+func InitDB() error {
 	db, err := ConnectDB()
 	if err != nil {
-		fmt.Println("数据库连接失败", err)
+		return err
 	}
 	DbOne = db
+	return nil
 }
