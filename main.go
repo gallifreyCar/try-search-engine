@@ -2,65 +2,129 @@ package main
 
 import (
 	"fmt"
-	mysqlCfg "github.com/go-sql-driver/mysql"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	"os"
+	"github.com/PuerkitoBio/goquery"
+	"github.com/gallifreyCar/try-search-engine/database"
+	"github.com/gallifreyCar/try-search-engine/model"
+	"github.com/gallifreyCar/try-search-engine/tools"
+	"net/url"
+	"strings"
 	"time"
 )
 
 func main() {
 	//初始化配置
-	initEnv()
+	err := initEnv()
+	if err != nil {
+		fmt.Println("初始化配置失败", err)
+		return
+	}
+
 	//开始爬取数据
 	nextStep(time.Now())
-	//阻塞
-	select {}
+
 }
 
 // 循环爬取数据
 func nextStep(startTime time.Time) {
-	//获取数据库url
-	var status []Status
-	db, err := connectDB()
-	if err != nil {
+	//访问数据库，获取要爬取的url
+
+	// 从数据库中获取未爬取的100条URL
+	var status []model.Status
+	database.DbOne.Where("craw_done = ?", 0).Find(&status).Limit(100)
+	fmt.Println("开始爬取", len(status), "条URL")
+
+	// 开始爬取
+	chs := make([]chan int, len(status))
+	for i, v := range status {
+		chs[i] = make(chan int)
+		go craw(chs[i], v)
+	}
+
+	// 等待爬取完成,统计结果
+	// 1:success 成功
+	// 2:networkError 网络错误
+	// 3:htmlError HTML解析错误
+	var result = make(map[int]int)
+	for _, ch := range chs {
+		res := <-ch
+		if _, ok := result[res]; ok {
+			result[res]++
+		} else {
+			result[res] = 1
+		}
+	}
+	fmt.Println("跑完一轮", time.Now().Unix()-startTime.Unix(), "秒")
+	fmt.Println("成功", result[0], "条")
+	fmt.Println("网络错误", result[1], "条")
+	fmt.Println("HTML解析错误", result[2], "条")
+
+	//跑下一轮
+	time.Sleep(30 * time.Second)
+	nextStep(time.Now())
+}
+
+// 爬取数据
+func craw(ch chan int, status model.Status) {
+	// 调用Curl函数去对URL发起请求，获取响应内容
+	doc, res := tools.Curl(status)
+	// 失败则直接返回
+	if res != 0 {
+		fmt.Println("爬取失败", status.Url, res)
+		ch <- res
 		return
 	}
-	db.Table("pages").Where("craw_done", 0).Order("id asc").Limit(100).Find(&status)
-	fmt.Println("开始爬取", len(status), "条数据")
-	fmt.Println("跑完一轮", time.Now().Unix()-startTime.Unix(), "秒")
-	nextStep(time.Now())
-	//todo 爬取数据
+	// 成功先更新Status表
+	status.CrawDone = 1
+	status.CrawTime = time.Now()
+	database.DbOne.Save(&status)
+
+	// 再更新Page表
+	var page model.Page
+	// 如果不存在则创建
+	database.DbOne.Where(model.Page{ID: status.ID}).FirstOrCreate(&page)
+	page.Url = status.Url
+	page.Host = status.Host
+	page.Title = strings.TrimSpace(doc.Find("title").Text())
+	page.Text = strings.TrimSpace(doc.Text())
+	page.CrawDone = status.CrawDone
+
+	//解析doc中的超链接
+	doc.Find("a").Each(func(i int, selection *goquery.Selection) {
+		// 获取href属性
+		getUrl, exists := selection.Attr("href")
+		if !exists {
+			return
+		}
+		// 过滤掉非法的url
+		parse, err := url.Parse(getUrl)
+		if err != nil || parse.Scheme == "" || parse.Host == "" {
+			return
+		}
+		// 过滤掉非http和https的url
+		if parse.Scheme != "http" && parse.Scheme != "https" {
+			return
+		}
+
+		// 保存到数据库Status表
+		var status model.Status
+		database.DbOne.Where(model.Status{Url: getUrl}).FirstOrCreate(&status)
+		status.Url = getUrl
+		status.Host = parse.Host
+		database.DbOne.Save(&status)
+	})
+
 }
 
 // 初始化变量
-func initEnv() {
-
-}
-
-// Status 表结构
-type Status struct {
-	ID       uint      `gorm:"primaryKey"`
-	Url      string    `gorm:"default:null"`
-	Host     string    `gorm:"default:null"`
-	CrawDone int       `gorm:"type:tinyint(1);default:0"`
-	CrawTime time.Time `gorm:"default:'2001-01-01 00:00:01'"`
-}
-
-// 连接数据库
-func connectDB() (db *gorm.DB, err error) {
-	cfg := mysqlCfg.Config{
-		User:                 os.Getenv("MYSQL_USER"),
-		Passwd:               os.Getenv("MYSQL_PASSWORD"),
-		Net:                  "tcp",
-		Addr:                 os.Getenv("MYSQL_ADDR"),
-		DBName:               os.Getenv("MYSQL_DBNAME"),
-		AllowNativePasswords: true,
-		ParseTime:            true,
-	}
-	db, err = gorm.Open(mysql.Open(cfg.FormatDSN()), &gorm.Config{})
+func initEnv() error {
+	database.InitDB()
+	err := database.DbOne.AutoMigrate(&model.Status{})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return db, nil
+	err = database.DbOne.AutoMigrate(&model.Page{})
+	if err != nil {
+		return err
+	}
+	return nil
 }
